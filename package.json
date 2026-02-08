@@ -4,13 +4,21 @@
   "description": "Remote Playwright browser access via SSH tunnel for agents",
   "type": "module",
   "scripts": {
+    "server:init": "./scripts/server-manager.sh init",
+    "server:start": "./scripts/server-manager.sh start",
+    "server:stop": "./scripts/server-manager.sh stop",
+    "server:list": "./scripts/server-manager.sh list",
+    "server:status": "./scripts/server-manager.sh status",
+    "agent:connect": "./scripts/agent-connect.sh",
+    "admin:monitor": "./scripts/admin-monitor.sh",
+    "admin:list": "./scripts/admin-monitor.sh list",
     "start:server": "./scripts/start-browser-server.sh",
     "tunnel": "./scripts/ssh-tunnel.sh",
     "agent": "./scripts/agent-example.sh",
     "example": "node agent.js",
     "multi-agent": "node multi-agent.js",
     "install:agent-browser": "npm install -g agent-browser && agent-browser install",
-    "install:deps": "npm install && npx playwright install"
+    "install:deps": "pnpm install && pnpm exec playwright install"
   },
   "dependencies": {
     "agent-browser": "latest"

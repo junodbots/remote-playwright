@@ -1,242 +1,483 @@
-# Remote Playwright Browser via SSH
+# Multi-Agent Remote Browser Server
 
-Remote browser automation setup using Playwright's Chrome DevTools Protocol (CDP) over SSH tunnel. Perfect for running AI agents (like Vercel's `agent-browser`) on a remote machine while keeping your local machine lightweight.
+Centralized browser infrastructure for multiple AI agents. Each agent gets their own isolated Chrome instance that runs on a shared server, accessible via SSH tunnel. Perfect for teams where agents need browsers but you want to monitor, assist, and manage them centrally.
 
 ## Architecture
 
 ```
-┌─────────────────┐      SSH Tunnel      ┌──────────────────┐
-│   Your Machine  │ ◄──────────────────► │  Remote Server   │
-│  (agent-browser)│   Port 9222          │ (Chrome + CDP)   │
-└─────────────────┘                      └──────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Remote Server (vm2.junod.dev)           │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │ Chrome:9222  │  │ Chrome:9223  │  │ Chrome:9224  │      │
+│  │ (Agent: dev1)│  │ (Agent: dev2)│  │ (Agent: dev3)│      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Admin Monitor - View/takeover any agent browser    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              ▲
+              SSH Tunnels     │     SSH Tunnels
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐           ┌────▼────┐           ┌────▼────┐
+   │ Agent 1 │           │ Agent 2 │           │ Agent 3 │
+   │(dev1)   │           │(dev2)   │           │(dev3)   │
+   └─────────┘           └─────────┘           └─────────┘
 ```
 
 ## Quick Start
 
-### 1. Install Dependencies (on both machines)
+### 1. Server Setup (One-time)
+
+On the remote server (e.g., `vm2.junod.dev`):
 
 ```bash
-# Install agent-browser globally
-npm install -g agent-browser
+cd remote-playwright
 
-# Install browser binaries
-agent-browser install
+# Initialize the multi-agent server
+./scripts/server-manager.sh init
 
-# On Linux, you may need dependencies
-agent-browser install --with-deps
+# Install Playwright (if not already installed)
+npm install
+npx playwright install chromium
 ```
 
-### 2. Start Browser on Remote Server
+### 2. Start Browser for an Agent
 
-On your remote server (the one with more resources):
+As admin on the server:
 
 ```bash
-# Option A: Use the provided script
-npm run start:server
+# Start a browser for agent "dev1"
+./scripts/server-manager.sh start dev1
 
-# Option B: Start Chrome directly
-chromium --remote-debugging-port=9222 --headless=new --no-sandbox
+# Start browsers for multiple agents
+./scripts/server-manager.sh start dev2
+./scripts/server-manager.sh start dev3
 
-# Option C: Persistent profile (saves cookies, logins)
-chromium --remote-debugging-port=9222 --user-data-dir=~/.chrome-remote-profile
+# See all running browsers
+./scripts/server-manager.sh list
 ```
 
-Verify it's working:
+**Output shows:**
+- Port assigned to the agent (e.g., 9222)
+- SSH command for the agent to connect
+- CDP URL for programmatic access
+
+### 3. Agent Connects (Agent's Machine)
+
+Each agent runs on their local machine:
+
 ```bash
-curl http://localhost:9222/json/version
+cd remote-playwright
+
+# Connect using their assigned agent name
+AGENT_NAME=dev1 ./scripts/agent-connect.sh
+
+# Or set it in environment
+export AGENT_NAME=dev1
+./scripts/agent-connect.sh
 ```
 
-### 3. Create SSH Tunnel
+This will:
+1. Find their assigned port on the server
+2. Create an SSH tunnel to that port
+3. Verify the browser connection
+4. Keep the tunnel open
 
-On your local machine (where agents run):
+### 4. Admin Monitors/Assists (Optional)
+
+As admin, you can view and help any agent:
 
 ```bash
-# Option A: Use the helper script
-npm run tunnel your-server.com
+# List all agents and their browsers
+./scripts/admin-monitor.sh list
 
-# Option B: Manual SSH tunnel
-ssh -N -L 9222:localhost:9222 your-server.com
+# Take a screenshot of dev1's browser
+./scripts/admin-monitor.sh screenshot dev1
 
-# Keep this terminal open! The tunnel runs continuously.
+# View dev1's browser via VNC (if visual display enabled)
+./scripts/admin-monitor.sh view dev1
+
+# Execute JavaScript in dev1's browser
+./scripts/admin-monitor.sh exec dev1 "document.title"
+
+# Navigate dev1's browser (to help them)
+./scripts/admin-monitor.sh navigate dev1 https://example.com
+
+# Interactive menu mode
+./scripts/admin-monitor.sh interactive
 ```
 
-### 4. Run Agent Commands
+## Use Case: Secure Login Flow
 
-Now you can use `agent-browser` with the remote browser:
+Here's the workflow for agents who need to log into services securely:
 
+### Step 1: Admin starts browser for agent
 ```bash
-# Take a snapshot (accessibility tree)
+# On server
+./scripts/server-manager.sh start alice
+# Output shows: Port 9222 assigned
+```
+
+### Step 2: Agent connects
+```bash
+# On Alice's machine
+AGENT_NAME=alice ./scripts/agent-connect.sh
+# Tunnel created, browser accessible at localhost:9222
+```
+
+### Step 3: Admin opens login page for agent
+```bash
+# On server (or via admin-monitor)
+./scripts/admin-monitor.sh navigate alice https://auth.openai.com/...
+```
+
+### Step 4: Agent views browser via VNC and logs in
+```bash
+# Alice connects VNC to see the browser
+vncviewer vm2.junod.dev:5900
+# Enters her credentials (admin cannot see them)
+```
+
+### Step 5: Agent continues with automation
+```bash
+# Alice uses her local tools with the authenticated browser
 agent-browser --cdp 9222 snapshot
-
-# Open a URL
-agent-browser --cdp 9222 open https://example.com
-
-# Evaluate JavaScript
-agent-browser --cdp 9222 eval "document.title"
-
-# List tabs
-agent-browser --cdp 9222 tab
-
-# Use the helper script
-npm run agent snapshot
-npm run agent open https://example.com
+# Or Playwright, etc.
 ```
 
-## Advanced Usage
+## Detailed Usage
 
-### Multiple Browser Instances
-
-For parallel agents, run multiple Chrome instances on different ports:
+### Server Manager Commands
 
 ```bash
-# On server - Instance 1
-chromium --remote-debugging-port=9222 --user-data-dir=~/.chrome-profile-1
+./scripts/server-manager.sh <command> [args]
 
-# On server - Instance 2  
-chromium --remote-debugging-port=9223 --user-data-dir=~/.chrome-profile-2
+Commands:
+  init                    Create directories and setup
+  start <agent-name>      Start browser for agent
+  stop <agent-name>       Stop browser for agent
+  stop all                Stop all browsers
+  list                    List all running browsers
+  status                  Show server overview
 
-# On local - Tunnel both
-ssh -N -L 9222:localhost:9222 -L 9223:localhost:9223 your-server.com
-
-# Use different agents with different ports
-agent-browser --cdp 9222 snapshot
-agent-browser --cdp 9223 snapshot
+Environment Variables:
+  SERVER_NAME    Server hostname (default: vm2.junod.dev)
+  BASE_PORT      Starting port (default: 9222)
+  MAX_AGENTS     Max concurrent agents (default: 10)
+  DATA_DIR       Where agent profiles are stored
 ```
 
-### Programmatic Usage (Node.js)
+### Agent Connection
+
+```bash
+./scripts/agent-connect.sh [command]
+
+Commands:
+  connect    Connect to assigned browser (default)
+  check      Quick status check
+  help       Show help
+
+Environment Variables:
+  SERVER_NAME    Server to connect to
+  AGENT_NAME     Your agent identifier
+```
+
+### Admin Monitoring
+
+```bash
+./scripts/admin-monitor.sh <command> [args]
+
+Commands:
+  list                    List all agents
+  view <agent>            View browser via VNC
+  screenshot <agent>      Take screenshot
+  exec <agent> <script>   Execute JavaScript
+  navigate <agent> <url>  Navigate to URL
+  interactive             Interactive menu
+```
+
+## Programmatic Usage
+
+### For Agents (Node.js/Playwright)
 
 ```javascript
 import { chromium } from 'playwright';
 
-// Connect to remote browser via CDP
-const browser = await chromium.connectOverCDP('http://localhost:9222');
-const page = await browser.newPage();
+const CDP_PORT = process.env.CDP_PORT || 9222;
+const CDP_URL = `http://localhost:${CDP_PORT}`;
 
-// Do agent work
-await page.goto('https://example.com');
-const title = await page.title();
-console.log(title);
-
-// Cleanup
-await browser.close();
+async function run() {
+  // Connect to your assigned browser
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  
+  // Get the existing page (already authenticated maybe)
+  const context = browser.contexts()[0];
+  const page = context.pages()[0];
+  
+  // Do your work
+  await page.goto('https://platform.openai.com');
+  // ... automation tasks ...
+  
+  await browser.close();
+}
 ```
+
+### For Admin (Monitoring)
+
+```javascript
+import { chromium } from 'playwright';
+
+async function monitorAgent(agentName, agentPort) {
+  const browser = await chromium.connectOverCDP(`http://localhost:${agentPort}`);
+  const page = browser.contexts()[0]?.pages()[0];
+  
+  // Take screenshot for monitoring
+  await page.screenshot({ path: `monitor-${agentName}.png` });
+  
+  // Check what they're doing
+  const url = page.url();
+  const title = await page.title();
+  console.log(`${agentName}: ${title} (${url})`);
+  
+  await browser.close();
+}
+```
+
+## Configuration
 
 ### Environment Variables
 
-```bash
-# Set default CDP port
-export CDP_PORT=9222
+Create a `.env` file on the server:
 
-# Use with agent-browser
-agent-browser --cdp $CDP_PORT snapshot
+```bash
+# Server configuration
+SERVER_NAME=vm2.junod.dev
+BASE_PORT=9222
+MAX_AGENTS=20
+DATA_DIR=/opt/chrome-agents
+
+# For agents (on their local machines)
+SERVER_NAME=vm2.junod.dev
+AGENT_NAME=$(whoami)
 ```
 
-### Cloud/Serverless Deployment
+### SSH Config (Recommended)
 
-For production use, consider these alternatives to self-managed SSH:
+Add to `~/.ssh/config` on agent machines:
 
-1. **Browserbase** - Managed browser infrastructure
+```
+Host vm2.junod.dev
+    HostName vm2.junod.dev
+    User your-username
+    IdentityFile ~/.ssh/id_rsa
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+```
+
+## Security Best Practices
+
+1. **SSH Key Authentication Only**
+   - Disable password auth on the server
+   - Use strong SSH keys
+
+2. **Firewall Rules**
    ```bash
-   export BROWSERBASE_API_KEY="..."
-   export BROWSERBASE_PROJECT_ID="..."
-   agent-browser -p browserbase open https://example.com
+   # On server - only allow localhost access to Chrome ports
+   sudo iptables -A INPUT -p tcp --dport 9222:9232 -s 127.0.0.1 -j ACCEPT
+   sudo iptables -A INPUT -p tcp --dport 9222:9232 -j DROP
    ```
 
-2. **Browser Use** - Another cloud provider
+3. **VNC Password Protection**
    ```bash
-   export BROWSER_USE_API_KEY="..."
-   agent-browser -p browseruse open https://example.com
+   # Set VNC password instead of -nopw
+   x11vnc -storepasswd MySecurePass ~/.vnc/passwd
+   x11vnc -rfbauth ~/.vnc/passwd ...
+   ```
+
+4. **Separate Agent Profiles**
+   Each agent gets their own Chrome profile (`--user-data-dir`), so:
+   - Cookies/logins are isolated
+   - Extensions don't leak between agents
+   - Storage is separate
+
+5. **Regular Cleanup**
+   ```bash
+   # Stop inactive browsers
+   ./scripts/server-manager.sh stop all
+   
+   # Clean up old profiles
+   rm -rf ~/.chrome-agents/dev1
    ```
 
 ## Troubleshooting
 
-### Connection Refused
+### Agent Can't Connect
 
 ```bash
-# Check if Chrome is listening on remote
-ssh your-server.com "curl -s http://localhost:9222/json/version"
+# Check if browser is running on server
+ssh vm2.junod.dev "curl -s http://localhost:9222/json/version"
 
-# If not, Chrome may not have started properly. Check:
-# 1. Chrome is installed
-# 2. Port 9222 is not already in use
-# 3. No firewall blocking localhost:9222
+# Check if port is assigned to agent
+ssh vm2.junod.dev "cat ~/.chrome-agents/pids/dev1_port"
+
+# Check SSH tunnel on agent's machine
+lsof -Pi :9222 -sTCP:LISTEN
 ```
 
-### Tunnel Disconnects
-
-Add these SSH options for stability:
-```bash
-ssh -N -L 9222:localhost:9222 \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -o ExitOnForwardFailure=yes \
-    your-server.com
-```
-
-### Permission Denied (Linux)
-
-If running on Linux without display:
-```bash
-# Use headless mode
-chromium --remote-debugging-port=9222 --headless=new
-
-# Or use Xvfb for virtual display
-xvfb-run chromium --remote-debugging-port=9222
-```
-
-### Agent-Browser Not Found
+### Admin Can't Monitor
 
 ```bash
-# Ensure global npm bin is in PATH
-export PATH="$PATH:$(npm bin -g)"
+# Verify you're on the server
+hostname  # Should show vm2.junod.dev
 
-# Or use npx
-npx agent-browser --cdp 9222 snapshot
+# Check if agent's browser is running
+./scripts/admin-monitor.sh list
+
+# Test direct connection
+curl http://localhost:9222/json/version
 ```
 
-## Security Considerations
+### Port Already in Use
 
-- **Never expose port 9222 to the internet directly** - Always use SSH tunnel or VPN
-- CDP provides full browser control - treat it like root access
-- Use firewall rules to block external access to port 9222
-- Consider using SSH key authentication only (no passwords)
-- For production, use dedicated browser services with authentication
+```bash
+# Find what's using the port
+lsof -Pi :9222 -sTCP:LISTEN
+
+# Kill it or use a different port for the agent
+./scripts/server-manager.sh stop dev1
+./scripts/server-manager.sh start dev1  # Will get next available port
+```
+
+### VNC Connection Issues
+
+```bash
+# Check if VNC is running
+netstat -tlnp | grep 5900
+
+# Restart VNC
+pkill x11vnc
+x11vnc -display :99 -forever -shared -nopw -rfbport 5900
+```
+
+## Advanced Features
+
+### Automatic Port Assignment
+
+The system automatically finds the next available port:
+
+```bash
+# dev1 gets 9222
+./scripts/server-manager.sh start dev1
+
+# dev2 gets 9223
+./scripts/server-manager.sh start dev2
+
+# dev3 gets 9224
+./scripts/server-manager.sh start dev3
+```
+
+### Persistent Profiles
+
+Agent data persists across restarts:
+
+```bash
+# Alice's browser with all her logins
+./scripts/server-manager.sh start alice
+# She logs in...
+./scripts/server-manager.sh stop alice
+
+# Later - her session is still there
+./scripts/server-manager.sh start alice
+# Still logged in!
+```
+
+### Multi-Server Setup
+
+For very large teams, run multiple servers:
+
+```bash
+# Server 1: Ports 9222-9231
+SERVER_NAME=browser1.company.com MAX_AGENTS=10 ./scripts/server-manager.sh init
+
+# Server 2: Ports 9232-9241
+SERVER_NAME=browser2.company.com BASE_PORT=9232 MAX_AGENTS=10 ./scripts/server-manager.sh init
+```
 
 ## Example Workflows
 
-### Web Scraping Agent
+### Daily Standup Check
 
 ```bash
-#!/bin/bash
-# scrape.sh
+# Admin checks all agent browsers
+./scripts/admin-monitor.sh list
 
-# 1. Start tunnel (in another terminal)
-# ssh -N -L 9222:localhost:9222 server.com
-
-# 2. Navigate and extract
-agent-browser --cdp 9222 open https://news.ycombinator.com
-agent-browser --cdp 9222 snapshot > page.html
-agent-browser --cdp 9222 eval "Array.from(document.querySelectorAll('.titleline a')).map(a => a.textContent).slice(0,5)"
+# Quick screenshot of each
+for agent in dev1 dev2 dev3; do
+    ./scripts/admin-monitor.sh screenshot $agent
+    echo "Screenshot saved for $agent"
+done
 ```
 
-### CI/CD Integration
+### Helping an Agent Debug
 
-```yaml
-# .github/workflows/test.yml
-- name: Start Remote Browser
-  run: |
-    ssh server "chromium --remote-debugging-port=9222 --headless=new &"
-    ssh -N -L 9222:localhost:9222 server &
-    sleep 5
+```bash
+# Agent says: "Something weird is happening"
 
-- name: Run Tests
-  run: |
-    agent-browser --cdp 9222 open http://localhost:3000
-    agent-browser --cdp 9222 snapshot
+# Admin views their browser
+./scripts/admin-monitor.sh view dev1
+
+# Or takes a screenshot to see what's wrong
+./scripts/admin-monitor.sh screenshot dev1
+
+# Can even navigate for them to a working page
+./scripts/admin-monitor.sh navigate dev1 https://working-site.com
 ```
 
-## Resources
+### Onboarding New Agent
 
-- [agent-browser docs](https://agent-browser.dev)
-- [Playwright CDP docs](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp)
-- [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
+```bash
+# 1. Admin creates browser
+./scripts/server-manager.sh start newdev
+
+# 2. Share connection info with newdev
+# Port: 9225
+# SSH: ssh -N -L 9225:localhost:9225 vm2.junod.dev
+
+# 3. Newdev runs on their machine
+AGENT_NAME=newdev ./scripts/agent-connect.sh
+
+# 4. Newdev uses the browser!
+agent-browser --cdp 9225 open https://example.com
+```
+
+## Migration from Single Browser
+
+If you're currently using a single shared browser:
+
+```bash
+# 1. Stop the old shared browser
+pkill -f 'chrome.*9222'
+
+# 2. Initialize multi-agent system
+./scripts/server-manager.sh init
+
+# 3. Start individual browsers for each user
+./scripts/server-manager.sh start alice
+./scripts/server-manager.sh start bob
+./scripts/server-manager.sh start charlie
+
+# 4. Each person connects with their own tunnel
+# Alice: AGENT_NAME=alice ./scripts/agent-connect.sh
+# Bob: AGENT_NAME=bob ./scripts/agent-connect.sh
+# etc.
+```
+
+## Credits
+
+Built with:
+- [Playwright](https://playwright.dev) - Browser automation
+- [agent-browser](https://agent-browser.dev) - CLI tool for browser control
+- Chrome DevTools Protocol (CDP) - Remote debugging interface

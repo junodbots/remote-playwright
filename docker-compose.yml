@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  browser-server:
+    build: .
+    ports:
+      - "9222:9222"
+    volumes:
+      - chrome-data:/data/chrome-profile
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    # Health check to ensure Chrome is responding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9222/json/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  chrome-data:
